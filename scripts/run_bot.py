@@ -1,49 +1,90 @@
-import time
-from engine.api_client import APIClient
-from engine.execution_engine import ExecutionEngine
-from portfolio.portfolio_state import PortfolioState
-from risk.risk_brain import RiskBrain
+class RiskBrain:
+    def __init__(self, portfolio_state):
+        self.portfolio = portfolio_state
 
-RECONCILE_INTERVAL = 5
+        # --- Risk Limits ---
+        self.max_position_per_symbol = 5.0
+        self.max_total_exposure = 10.0
+        self.daily_loss_limit = -1000.0
 
-def main():
-    api = APIClient()
-    engine = ExecutionEngine(api)
-    portfolio = PortfolioState()
-    risk = RiskBrain(portfolio)
+        # --- Drawdown Controls ---
+        self.equity_peak = 0.0
+        self.drawdown = 0.0
+        self.drawdown_soft_limit = -500.0   # start reducing risk
+        self.drawdown_hard_limit = -1500.0  # full stop
 
-    print("🚀 Bot started...")
+        self.kill_switch_active = False
 
-    while True:
-        # 1️⃣ Reconcile orders → get fills
-        fills = engine.reconciler.reconcile()
+    def update_drawdown(self):
+        equity = self.portfolio.total_pnl()
 
-        # 2️⃣ Update portfolio
-        for fill in fills:
-            portfolio.process_fill(fill)
+        if equity > self.equity_peak:
+            self.equity_peak = equity
 
-        # 3️⃣ Update PnL
-        portfolio.mark_to_market({})
+        self.drawdown = equity - self.equity_peak
 
-        # 4️⃣ Example incoming proposal (stub for now)
-        proposal = {
-            "symbol": "BTC-PERP",
-            "direction": "LONG",
-            "size": 1.5
-        }
+    def drawdown_risk_multiplier(self):
+        """
+        Returns a size multiplier based on drawdown.
+        """
+        if self.drawdown <= self.drawdown_hard_limit:
+            self.kill_switch_active = True
+            return 0.0
 
-        approved, adj_size, reason = risk.evaluate_trade(proposal)
+        if self.drawdown <= self.drawdown_soft_limit:
+            # Scale down linearly between soft and hard
+            range_dd = self.drawdown_hard_limit - self.drawdown_soft_limit
+            progress = (self.drawdown - self.drawdown_soft_limit) / range_dd
+            return max(0.2, 1.0 + progress)  # never less than 20%
 
-        if approved and adj_size > 0:
-            proposal["size"] = adj_size
-            engine.execute(proposal)
-            print(f"✅ Trade approved: {proposal}")
-        else:
-            print(f"⛔ Trade blocked: {reason}")
+        return 1.0
 
-        portfolio.print_summary()
-        time.sleep(RECONCILE_INTERVAL)
+    def evaluate_trade(self, proposal):
+        """
+        Returns:
+            approved (bool),
+            adjusted_size (float),
+            reason (str)
+        """
 
+        self.update_drawdown()
 
-if __name__ == "__main__":
-    main()
+        if self.kill_switch_active:
+            return False, 0.0, "Kill switch active (drawdown)"
+
+        total_pnl = self.portfolio.total_pnl()
+        if total_pnl <= self.daily_loss_limit:
+            self.kill_switch_active = True
+            return False, 0.0, "Daily loss limit breached"
+
+        symbol = proposal["symbol"]
+        direction = proposal["direction"]
+        size = proposal["size"]
+
+        signed_size = size if direction == "LONG" else -size
+        current_positions = self.portfolio.exposure()
+        current_symbol_size = current_positions.get(symbol, 0.0)
+
+        # --- Drawdown scaling ---
+        multiplier = self.drawdown_risk_multiplier()
+        size *= multiplier
+        if size <= 0:
+            return False, 0.0, "Drawdown hard limit reached"
+
+        # --- Per-symbol limit ---
+        new_symbol_size = current_symbol_size + signed_size
+        if abs(new_symbol_size) > self.max_position_per_symbol:
+            allowed_size = self.max_position_per_symbol - abs(current_symbol_size)
+            if allowed_size <= 0:
+                return False, 0.0, "Symbol exposure limit reached"
+            size = min(size, allowed_size)
+
+        # --- Total exposure limit ---
+        total_exposure = sum(abs(v) for v in current_positions.values())
+        if total_exposure + abs(size) > self.max_total_exposure:
+            allowed = self.max_total_exposure - total_exposure
+            if allowed <= 0:
+                return False, 0.0, "Total exposure limit reached"
+            size = min(size, allowed)
+
+        return True, size, f"Approved (DD adj x{multiplier:.2f})"
