@@ -1,24 +1,33 @@
-from strategies.trend_following import TrendFollowingStrategy
-from risk.risk_brain import RiskBrain
-from allocation.strategy_allocator import StrategyAllocator
+import time
+from engine.api_client import APIClient
 from engine.execution_engine import ExecutionEngine
+from portfolio.portfolio_state import PortfolioState
+
+RECONCILE_INTERVAL = 5
 
 def main():
-    strategy = TrendFollowingStrategy()
-    risk = RiskBrain()
-    allocator = StrategyAllocator()
-    engine = ExecutionEngine()
+    api = APIClient()
+    engine = ExecutionEngine(api)
+    portfolio = PortfolioState()
 
-    # Stub example flow
-    signal = {"symbol": "BTC-PERP", "direction": "LONG", "size": 1, "timestamp": 0}
-    proposal = strategy.build_proposal(signal)
+    print("🚀 Bot started...")
 
-    proposal = allocator.adjust_size(proposal, "LOW_VOL", 1.0)
-    approved, size, reason = risk.evaluate_trade(proposal, {}, {})
-    
-    if approved:
-        proposal["size"] = size
-        engine.execute(proposal)
+    while True:
+        # 1️⃣ Reconcile open orders
+        fills = engine.reconciler.reconcile()
+
+        # 2️⃣ Update portfolio from fills
+        for fill in fills:
+            portfolio.process_fill(fill)
+
+        # 3️⃣ Mark-to-market PnL update (stub market prices for now)
+        portfolio.mark_to_market({})  # later: real price feed
+
+        # 4️⃣ Debug output
+        portfolio.print_summary()
+
+        time.sleep(RECONCILE_INTERVAL)
+
 
 if __name__ == "__main__":
     main()
