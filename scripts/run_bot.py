@@ -25,7 +25,6 @@ def main():
 
         portfolio.mark_to_market({})
 
-        # Fake market price input
         market_price = 50000
         risk.update_market_state({"price": market_price})
 
@@ -43,12 +42,17 @@ def main():
             time.sleep(RECONCILE_INTERVAL)
             continue
 
-        approved, adj_size, reason = risk.evaluate_trade(proposal)
+        approved, adj_size, stop_loss, take_profit, reason = risk.evaluate_trade(proposal, market_price)
 
         if approved and adj_size > 0:
             proposal["size"] = adj_size
+            proposal["stop_loss"] = stop_loss
+            proposal["take_profit"] = take_profit
+
             engine.execute(proposal)
-            print(f"✅ Trade approved: {proposal} | {reason}")
+
+            print(f"✅ Trade approved: {proposal}")
+            print(f"🛑 SL: {stop_loss:.2f} | 🎯 TP: {take_profit:.2f} | {reason}")
         else:
             print(f"⛔ Trade blocked: {reason}")
 
