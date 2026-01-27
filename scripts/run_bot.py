@@ -1,10 +1,14 @@
 import time
+import random
 from engine.api_client import APIClient
 from engine.execution_engine import ExecutionEngine
 from portfolio.portfolio_state import PortfolioState
 from risk.risk_brain import RiskBrain
 
 RECONCILE_INTERVAL = 5
+
+def generate_fake_returns():
+    return [random.uniform(-0.02, 0.02) for _ in range(50)]
 
 def main():
     api = APIClient()
@@ -22,6 +26,9 @@ def main():
 
         portfolio.mark_to_market({})
 
+        # Update volatility model
+        risk.update_market_state({"returns": generate_fake_returns()})
+
         proposal = {
             "symbol": "BTC-PERP",
             "direction": "LONG",
@@ -37,7 +44,7 @@ def main():
         else:
             print(f"⛔ Trade blocked: {reason}")
 
-        print(f"📉 Drawdown: {risk.drawdown:.2f} | Peak: {risk.equity_peak:.2f}")
+        print(f"📉 Drawdown: {risk.drawdown:.2f} | Volatility: {risk.vol_model.volatility:.4f}")
         portfolio.print_summary()
 
         time.sleep(RECONCILE_INTERVAL)
