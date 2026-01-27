@@ -1,15 +1,5 @@
 🧭 SYSTEM ARCHITECTURE (Master Blueprint)
 
-You’ll use this for:
-	•	GitHub README
-	•	Technical docs
-	•	Investor PDFs
-	•	Diagrams
-
-I’ll write it in clear English first (easiest to translate later).
-
-⸻
-
 🧠 1. High-Level Philosophy
 
 This system is designed with a risk-first architecture.
