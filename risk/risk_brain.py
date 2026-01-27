@@ -2,12 +2,42 @@ class RiskBrain:
     def __init__(self, portfolio_state):
         self.portfolio = portfolio_state
 
-        # --- Risk Limits (configurable later) ---
+        # --- Risk Limits ---
         self.max_position_per_symbol = 5.0
         self.max_total_exposure = 10.0
-        self.daily_loss_limit = -1000.0  # stop trading after this loss
+        self.daily_loss_limit = -1000.0
+
+        # --- Drawdown Controls ---
+        self.equity_peak = 0.0
+        self.drawdown = 0.0
+        self.drawdown_soft_limit = -500.0   # start reducing risk
+        self.drawdown_hard_limit = -1500.0  # full stop
 
         self.kill_switch_active = False
+
+    def update_drawdown(self):
+        equity = self.portfolio.total_pnl()
+
+        if equity > self.equity_peak:
+            self.equity_peak = equity
+
+        self.drawdown = equity - self.equity_peak
+
+    def drawdown_risk_multiplier(self):
+        """
+        Returns a size multiplier based on drawdown.
+        """
+        if self.drawdown <= self.drawdown_hard_limit:
+            self.kill_switch_active = True
+            return 0.0
+
+        if self.drawdown <= self.drawdown_soft_limit:
+            # Scale down linearly between soft and hard
+            range_dd = self.drawdown_hard_limit - self.drawdown_soft_limit
+            progress = (self.drawdown - self.drawdown_soft_limit) / range_dd
+            return max(0.2, 1.0 + progress)  # never less than 20%
+
+        return 1.0
 
     def evaluate_trade(self, proposal):
         """
@@ -17,22 +47,29 @@ class RiskBrain:
             reason (str)
         """
 
+        self.update_drawdown()
+
         if self.kill_switch_active:
-            return False, 0.0, "Kill switch active"
+            return False, 0.0, "Kill switch active (drawdown)"
 
         total_pnl = self.portfolio.total_pnl()
         if total_pnl <= self.daily_loss_limit:
             self.kill_switch_active = True
-            return False, 0.0, "Daily loss limit breached — kill switch activated"
+            return False, 0.0, "Daily loss limit breached"
 
         symbol = proposal["symbol"]
         direction = proposal["direction"]
         size = proposal["size"]
 
         signed_size = size if direction == "LONG" else -size
-
         current_positions = self.portfolio.exposure()
         current_symbol_size = current_positions.get(symbol, 0.0)
+
+        # --- Drawdown scaling ---
+        multiplier = self.drawdown_risk_multiplier()
+        size *= multiplier
+        if size <= 0:
+            return False, 0.0, "Drawdown hard limit reached"
 
         # --- Per-symbol limit ---
         new_symbol_size = current_symbol_size + signed_size
@@ -50,4 +87,4 @@ class RiskBrain:
                 return False, 0.0, "Total exposure limit reached"
             size = min(size, allowed)
 
-        return True, size, "Approved"
+        return True, size, f"Approved (DD adj x{multiplier:.2f})"
