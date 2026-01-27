@@ -1,52 +1,58 @@
 import time
-import random
 from engine.api_client import APIClient
 from engine.execution_engine import ExecutionEngine
 from portfolio.portfolio_state import PortfolioState
 from risk.risk_brain import RiskBrain
+from risk.volatility_model import VolatilityModel
+from strategy.strategy_router import StrategyRouter
 
 RECONCILE_INTERVAL = 5
-
-def generate_fake_returns():
-    return [random.uniform(-0.02, 0.02) for _ in range(50)]
 
 def main():
     api = APIClient()
     engine = ExecutionEngine(api)
     portfolio = PortfolioState()
-    risk = RiskBrain(portfolio)
+    vol_model = VolatilityModel()
+    risk = RiskBrain(portfolio, vol_model)
+    router = StrategyRouter()
 
     print("🚀 Bot started...")
 
     while True:
         fills = engine.reconciler.reconcile()
-
         for fill in fills:
             portfolio.process_fill(fill)
 
         portfolio.mark_to_market({})
 
-        # Update volatility model
-        risk.update_market_state({"returns": generate_fake_returns()})
+        # Fake market price input
+        market_price = 50000
+        risk.update_market_state({"price": market_price})
 
         proposal = {
             "symbol": "BTC-PERP",
             "direction": "LONG",
-            "size": 1.5
+            "size": 1.5,
+            "strategy": "trend_following"
         }
+
+        regime = risk.regime_model.get_regime()
+
+        if not router.is_strategy_allowed(proposal["strategy"], regime):
+            print(f"⛔ Strategy {proposal['strategy']} disabled in {regime} regime")
+            time.sleep(RECONCILE_INTERVAL)
+            continue
 
         approved, adj_size, reason = risk.evaluate_trade(proposal)
 
         if approved and adj_size > 0:
             proposal["size"] = adj_size
             engine.execute(proposal)
-            print(f"✅ Trade approved: {proposal}")
+            print(f"✅ Trade approved: {proposal} | {reason}")
         else:
             print(f"⛔ Trade blocked: {reason}")
 
-        print(f"📉 Drawdown: {risk.drawdown:.2f} | Volatility: {risk.vol_model.volatility:.4f}")
         portfolio.print_summary()
-
         time.sleep(RECONCILE_INTERVAL)
 
 
