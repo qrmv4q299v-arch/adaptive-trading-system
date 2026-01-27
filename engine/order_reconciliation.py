@@ -1,7 +1,7 @@
 import time
 
 RECONCILE_INTERVAL = 5
-STUCK_TIMEOUT = 30  # seconds before we consider order stuck
+STUCK_TIMEOUT = 30
 
 class OrderReconciliation:
     def __init__(self, api_client):
@@ -13,40 +13,36 @@ class OrderReconciliation:
 
     def reconcile(self):
         now = time.time()
+        fill_events = []
 
         for oid, order in list(self.open_orders.items()):
             status = self.api.get_order_status(oid)
 
             order["status"] = status["status"]
-            order["filled_size"] = status["filled_size"]
+            new_filled = status["filled_size"]
+
+            if new_filled > order["filled_size"]:
+                fill_size = new_filled - order["filled_size"]
+                order["filled_size"] = new_filled
+
+                fill_events.append({
+                    "symbol": order["symbol"],
+                    "side": order["side"],
+                    "size": fill_size,
+                    "price": status.get("avg_price", 0),
+                    "timestamp": now
+                })
 
             if status["status"] == "FILLED":
-                self._handle_filled(order)
+                self.open_orders.pop(oid, None)
 
-            elif status["status"] == "PARTIALLY_FILLED":
-                self._handle_partial(order, now)
+            elif status["status"] == "PARTIALLY_FILLED" and now - order["timestamp"] > STUCK_TIMEOUT:
+                self.api.cancel_order(oid)
 
             elif status["status"] == "NEW" and now - order["timestamp"] > STUCK_TIMEOUT:
-                self._handle_stuck(order)
+                self.api.cancel_order(oid)
 
             elif status["status"] == "CANCELED":
-                self._handle_canceled(order)
+                self.open_orders.pop(oid, None)
 
-    def _handle_filled(self, order):
-        print(f"Order FILLED: {order['exchange_order_id']}")
-        self.open_orders.pop(order["exchange_order_id"], None)
-
-    def _handle_partial(self, order, now):
-        print(f"Order PARTIAL: {order['exchange_order_id']} size {order['filled_size']}")
-
-        if now - order["timestamp"] > STUCK_TIMEOUT:
-            print("Partial fill stuck — canceling remainder")
-            self.api.cancel_order(order["exchange_order_id"])
-
-    def _handle_stuck(self, order):
-        print(f"Order STUCK: {order['exchange_order_id']} — canceling")
-        self.api.cancel_order(order["exchange_order_id"])
-
-    def _handle_canceled(self, order):
-        print(f"Order CANCELED: {order['exchange_order_id']}")
-        self.open_orders.pop(order["exchange_order_id"], None)
+        return fill_events
