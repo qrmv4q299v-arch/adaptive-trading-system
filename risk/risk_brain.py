@@ -1,10 +1,12 @@
 from risk.regime_model import RegimeModel
+from risk.stop_model import StopModel
 
 class RiskBrain:
     def __init__(self, portfolio_state, vol_model):
         self.portfolio = portfolio_state
         self.vol_model = vol_model
         self.regime_model = RegimeModel()
+        self.stop_model = StopModel()
 
         self.max_position_per_symbol = 5.0
         self.max_total_exposure = 10.0
@@ -38,14 +40,14 @@ class RiskBrain:
     def cpm_multiplier(self):
         return 0.5 if self.cpm_active else 1.0
 
-    def evaluate_trade(self, proposal):
+    def evaluate_trade(self, proposal, market_price: float):
         if self.kill_switch_active:
-            return False, 0.0, "Kill switch active"
+            return False, 0.0, None, None, "Kill switch active"
 
         total_pnl = self.portfolio.total_pnl()
         if total_pnl <= self.daily_loss_limit:
             self.kill_switch_active = True
-            return False, 0.0, "Daily loss limit breached"
+            return False, 0.0, None, None, "Daily loss limit breached"
 
         symbol = proposal["symbol"]
         direction = proposal["direction"]
@@ -67,17 +69,25 @@ class RiskBrain:
         if abs(new_symbol_size) > self.max_position_per_symbol:
             allowed_size = self.max_position_per_symbol - abs(current_symbol_size)
             if allowed_size <= 0:
-                return False, 0.0, "Symbol exposure limit reached"
+                return False, 0.0, None, None, "Symbol exposure limit reached"
             size = min(size, allowed_size)
 
         total_exposure = sum(abs(v) for v in current_positions.values())
         if total_exposure + abs(size) > self.max_total_exposure:
             allowed = self.max_total_exposure - total_exposure
             if allowed <= 0:
-                return False, 0.0, "Total exposure limit reached"
+                return False, 0.0, None, None, "Total exposure limit reached"
             size = min(size, allowed)
 
         regime = self.regime_model.get_regime()
+
+        stop_loss, take_profit = self.stop_model.compute_stops(
+            price=market_price,
+            direction=direction,
+            regime=regime,
+            vol_multiplier=vol_mult
+        )
+
         mode = "CPM" if self.cpm_active else "NORMAL"
 
-        return True, size, f"{mode} | Regime={regime} | Mult={combined_mult:.2f}"
+        return True, size, stop_loss, take_profit, f"{mode} | Regime={regime} | Mult={combined_mult:.2f}"
