@@ -1,30 +1,28 @@
-import time
-from engine.order_reconciliation import OrderReconciliation
+from engine.position_manager import PositionManager
 
 class ExecutionEngine:
     def __init__(self, api_client):
         self.api = api_client
-        self.reconciler = OrderReconciliation(api_client)
+        self.position_manager = PositionManager(api_client)
+        self.reconciler = None  # assuming already implemented
 
     def execute(self, proposal):
-        side = "BUY" if proposal["direction"] == "LONG" else "SELL"
-
-        exchange_order_id = self.api.place_order(
-            symbol=proposal["symbol"],
-            side=side,
-            size=proposal["size"]
-        )
-
         order = {
-            "proposal_id": proposal.get("id"),
-            "exchange_order_id": exchange_order_id,
             "symbol": proposal["symbol"],
-            "side": side,
-            "requested_size": proposal["size"],
-            "filled_size": 0.0,
-            "status": "NEW",
-            "timestamp": time.time()
+            "side": "buy" if proposal["direction"] == "LONG" else "sell",
+            "size": proposal["size"],
+            "stop_loss": proposal["stop_loss"],
+            "take_profit": proposal["take_profit"]
         }
 
-        self.reconciler.track_order(order)
-        return order
+        fill = self.api.place_order(order)
+
+        if fill:
+            self.position_manager.on_fill({
+                "symbol": proposal["symbol"],
+                "price": fill["price"],
+                "size": proposal["size"],
+                "direction": proposal["direction"],
+                "stop_loss": proposal["stop_loss"],
+                "take_profit": proposal["take_profit"]
+            })
