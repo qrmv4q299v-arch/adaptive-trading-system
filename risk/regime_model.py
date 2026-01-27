@@ -4,18 +4,17 @@ class RegimeModel:
     def __init__(self):
         self.prices = []
         self.window = 50
-
         self.current_regime = "NEUTRAL"
 
-    def update(self, price):
+    def update(self, price: float):
         self.prices.append(price)
         if len(self.prices) > self.window:
             self.prices.pop(0)
-
         self.detect_regime()
 
     def detect_regime(self):
         if len(self.prices) < 20:
+            self.current_regime = "NEUTRAL"
             return
 
         prices = np.array(self.prices)
@@ -23,9 +22,9 @@ class RegimeModel:
 
         volatility = np.std(returns)
         trend_strength = abs(prices[-1] - prices[0]) / prices[0]
+        mean_price = np.mean(prices)
 
-        # --- REGIME RULES ---
-        if volatility > 0.05 and prices[-1] < np.mean(prices):
+        if volatility > 0.05 and prices[-1] < mean_price:
             self.current_regime = "CRASH"
         elif trend_strength > 0.03:
             self.current_regime = "TREND"
@@ -38,10 +37,9 @@ class RegimeModel:
         return self.current_regime
 
     def risk_multiplier(self):
-        if self.current_regime == "TREND":
-            return 1.2
-        elif self.current_regime == "CHOP":
-            return 0.7
-        elif self.current_regime == "CRASH":
-            return 0.4
-        return 1.0
+        return {
+            "TREND": 1.2,
+            "CHOP": 0.7,
+            "CRASH": 0.4,
+            "NEUTRAL": 1.0
+        }[self.current_regime]
