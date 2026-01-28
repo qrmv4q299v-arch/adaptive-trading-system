@@ -6,16 +6,15 @@ class ExecutionEngine:
         self.api = api_client
         self.position_manager = PositionManager(api_client)
         self.optimizer = ExecutionOptimizer()
-        self.reconciler = None
 
-    def execute(self, proposal):
+    def execute(self, proposal, market_state):
         order = {
             "symbol": proposal["symbol"],
             "side": "buy" if proposal["direction"] == "LONG" else "sell",
             "size": proposal["size"],
         }
 
-        fill = self.optimizer.execute_order(self.api, order)
+        fill = self.optimizer.execute_order(self.api, order, market_state)
 
         if fill:
             self.position_manager.on_fill({
