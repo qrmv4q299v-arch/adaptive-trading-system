@@ -1,7 +1,7 @@
 class APIClient:
     def place_order(self, order):
-        print(f"📤 Placing order: {order}")
-        return {"price": 50000}
+        print(f"📤 Executing slice: {order}")
+        return {"price": 50000}  # Simulated fill
 
     def modify_stop(self, symbol, new_stop):
         print(f"🔄 Updating stop for {symbol} → {new_stop:.2f}")
