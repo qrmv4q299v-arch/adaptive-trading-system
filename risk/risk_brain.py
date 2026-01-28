@@ -1,6 +1,7 @@
 from risk.regime_model import RegimeModel
 from risk.volatility_kill_switch import VolatilityKillSwitch
 from risk.correlation_model import CorrelationModel
+from risk.liquidity_model import LiquidityModel
 
 class RiskBrain:
     def __init__(self, portfolio, vol_model):
@@ -9,6 +10,7 @@ class RiskBrain:
         self.regime_model = RegimeModel()
         self.kill_switch = VolatilityKillSwitch()
         self.correlation_model = CorrelationModel()
+        self.liquidity_model = LiquidityModel()
 
         self.cpm_active = False
 
@@ -39,9 +41,13 @@ class RiskBrain:
 
         corr_mult = 1.0
         if corr_exposure > self.correlation_model.max_cluster_exposure:
-            corr_mult = 0.5  # Cut size if cluster too big
+            corr_mult = 0.5
 
-        combined_mult = dd_mult * vol_mult * cpm_mult * regime_mult * corr_mult
+        liquidity_mult = self.liquidity_model.liquidity_multiplier(
+            symbol, base_size, market_price
+        )
+
+        combined_mult = dd_mult * vol_mult * cpm_mult * regime_mult * corr_mult * liquidity_mult
         size = base_size * combined_mult
 
         sl, tp = self.compute_stops(proposal["direction"], market_price)
@@ -50,7 +56,8 @@ class RiskBrain:
         mode = "CPM" if self.cpm_active else "NORMAL"
 
         reason = (
-            f"{mode} | Regime={regime} | CorrExp={corr_exposure:.2f} | Size x{combined_mult:.2f}"
+            f"{mode} | Regime={regime} | CorrExp={corr_exposure:.2f} "
+            f"| LiqMult={liquidity_mult:.2f} | Size x{combined_mult:.2f}"
         )
 
         return True, size, sl, tp, reason
