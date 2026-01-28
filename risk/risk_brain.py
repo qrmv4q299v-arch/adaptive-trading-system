@@ -1,6 +1,45 @@
 # risk/risk_brain.py
 from __future__ import annotations
 
+from dataclasses import dataclass
+from typing import Any, Dict, Tuple
+
+from core.contracts import ExecutionProposal
+
+
+@dataclass
+class RiskDecision:
+    action: str  # EXECUTE | PAUSE_TRADES | CIRCUIT_BREAK | REJECT
+    allocation_multiplier: float
+    reason: str
+
+
+class RiskBrain:
+    """
+    v1 RiskBrain (minimal, safe defaults)
+    - blocks if portfolio kill conditions are set (via portfolio_state)
+    - clamps allocation multiplier to [0,1]
+    """
+
+    def assess(self, proposal: ExecutionProposal, portfolio_state: Dict[str, Any]) -> Tuple[str, float, str]:
+        # basic sanity
+        ok, err = proposal.validate()
+        if not ok:
+            return "REJECT", 0.0, f"Invalid proposal: {err}"
+
+        # kill-switch hooks (portfolio_state can be fed by volatility kill switch etc.)
+        if portfolio_state.get("kill_switch") is True:
+            return "CIRCUIT_BREAK", 0.0, "Kill-switch active"
+
+        # if API failing repeatedly, pause
+        api_streak = int(portfolio_state.get("api_failure_streak", 0) or 0)
+        if api_streak >= 5:
+            return "PAUSE_TRADES", 0.0, f"API failure streak={api_streak}"
+
+        # base allow
+        return "EXECUTE", 1.0, "GREEN"
+from __future__ import annotations
+
 import logging
 from dataclasses import dataclass
 from typing import Any, Dict, Tuple, Optional
