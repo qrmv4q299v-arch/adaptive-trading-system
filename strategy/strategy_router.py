@@ -10,10 +10,6 @@ Key ideas:
 - Router decides WHICH strategy gets to propose a trade
 - Strategy itself produces ExecutionProposal with frozen tags
 - Risk layer / execution layer can later size/pause, but router stays pure
-
-Integrations:
-- Provide `regime` from your HTF regime engine
-- Provide `risk_state` from risk brain (optional)
 """
 
 from __future__ import annotations
@@ -158,26 +154,46 @@ class RiskState:
 @dataclass
 class RouterConfig:
     """
-    This is where we encode what Grok/Grok-attribution found:
-    - LIQUIDITY_RAID underperforms in HIGH_VOLATILITY / TRANSITION
-    - Basket 3 underperforms (esp with LIQUIDITY_RAID)
-    - Dangerous regime transitions: TREND_UP->HIGH_VOL, BALANCED->TRANSITION
+    Encodes known constraints and safe defaults:
+    - Liquidity Raid often unstable in HIGH_VOLATILITY / TRANSITION
+    - Basket 3 soft-block to prefer more liquid baskets first
+    - Optional "no trade" regimes at router level (soft gate)
     """
     allow_liquidity_raid: bool = True
-    disable_liquidity_raid_in: Tuple[HTFRegime, ...] = (HTFRegime.HIGH_VOLATILITY, HTFRegime.TRANSITION)
-    basket3_soft_block: bool = True  # router prefers others first
+    disable_liquidity_raid_in: Tuple[HTFRegime, ...] = (
+        HTFRegime.HIGH_VOLATILITY,
+        HTFRegime.TRANSITION,
+    )
 
-    # Optional: router-level “no trade” regimes (soft gate)
+    basket3_soft_block: bool = True
+
+    # Soft no-trade regimes (router-level). Risk layer still enforces hard blocks.
     no_trade_regimes: Tuple[HTFRegime, ...] = ()
+
+    # Transition shock filters (soft) — treat these transitions as "danger mode"
+    danger_transitions: Tuple[Tuple[HTFRegime, HTFRegime], ...] = (
+        (HTFRegime.TREND_UP, HTFRegime.HIGH_VOLATILITY),
+        (HTFRegime.BALANCED, HTFRegime.TRANSITION),
+    )
 
     # Strategy priority by regime (names must exist in registry)
     regime_priority: Dict[HTFRegime, List[str]] = field(default_factory=lambda: {
         HTFRegime.TREND_UP: ["trend_continuation", "mean_reversion", "liquidity_raid"],
         HTFRegime.TREND_DOWN: ["trend_continuation", "mean_reversion", "liquidity_raid"],
         HTFRegime.BALANCED: ["mean_reversion", "trend_continuation", "liquidity_raid"],
-        HTFRegime.HIGH_VOLATILITY: ["mean_reversion", "trend_continuation"],  # no liquidity_raid by default
-        HTFRegime.TRANSITION: ["mean_reversion"],  # very conservative
+        HTFRegime.HIGH_VOLATILITY: ["mean_reversion", "trend_continuation"],
+        HTFRegime.TRANSITION: ["mean_reversion"],
     })
+
+    # Conservative priority list when "danger transition" is detected
+    danger_priority: List[str] = field(default_factory=lambda: ["mean_reversion"])
+
+    # Extra conservative router filters based on risk_state (soft selection filters)
+    max_api_failure_streak_for_aggressive: int = 2
+    block_aggressive_on_vol_spike: bool = True
+
+    # Which strategies are considered "aggressive" (router may skip them under stress)
+    aggressive_strategies: Tuple[str, ...] = ("liquidity_raid",)
 
 
 # =========================
@@ -188,6 +204,7 @@ class StrategyRouter:
     """
     Chooses a strategy based on regime and risk_state.
     Does NOT alter strategy internals.
+    Returns the first valid ExecutionProposal by priority.
     """
 
     def __init__(
@@ -197,6 +214,35 @@ class StrategyRouter:
     ) -> None:
         self.strategies = strategies
         self.config = config or RouterConfig()
+
+    def _priority_for_regime(
+        self,
+        regime: HTFRegime,
+        prev_regime: Optional[HTFRegime],
+    ) -> List[str]:
+        if prev_regime is not None and (prev_regime, regime) in self.config.danger_transitions:
+            return list(self.config.danger_priority)
+        return list(self.config.regime_priority.get(regime, []))
+
+    def _apply_rule_gates(
+        self,
+        priority: List[str],
+        regime: HTFRegime,
+        risk_state: RiskState,
+    ) -> List[str]:
+        # Liquidity raid disabled by regime config
+        if (not self.config.allow_liquidity_raid) or (regime in self.config.disable_liquidity_raid_in):
+            priority = [p for p in priority if p != "liquidity_raid"]
+
+        # If volatility spike, optionally block aggressive strategies
+        if self.config.block_aggressive_on_vol_spike and risk_state.vol_spike:
+            priority = [p for p in priority if p not in self.config.aggressive_strategies]
+
+        # If API failures are stacking, block aggressive strategies
+        if risk_state.api_failure_streak > self.config.max_api_failure_streak_for_aggressive:
+            priority = [p for p in priority if p not in self.config.aggressive_strategies]
+
+        return priority
 
     def route(
         self,
@@ -218,23 +264,12 @@ class StrategyRouter:
         if regime in self.config.no_trade_regimes:
             return None
 
-        # Transition soft block (the real block can be in RiskGate)
-        if prev_regime is not None:
-            if (prev_regime == HTFRegime.TREND_UP and regime == HTFRegime.HIGH_VOLATILITY) or \
-               (prev_regime == HTFRegime.BALANCED and regime == HTFRegime.TRANSITION):
-                # We still allow a trade if the top conservative strategy finds a *very* clean setup,
-                # but we only consider the most conservative list.
-                priority = ["mean_reversion"]
-            else:
-                priority = self.config.regime_priority.get(regime, [])
-        else:
-            priority = self.config.regime_priority.get(regime, [])
+        # Strategy priority list
+        priority = self._priority_for_regime(regime, prev_regime)
+        priority = self._apply_rule_gates(priority, regime, rs)
 
-        # Apply liquidity-raid regime disable
-        if (not self.config.allow_liquidity_raid) or (regime in self.config.disable_liquidity_raid_in):
-            priority = [p for p in priority if p != "liquidity_raid"]
+        basket3_fallback: Optional[ExecutionProposal] = None
 
-        # Try strategies in order, return first valid proposal
         for strat_key in priority:
             strat = self.strategies.get(strat_key)
             if strat is None:
@@ -249,32 +284,20 @@ class StrategyRouter:
             if proposal is None:
                 continue
 
-            ok, err = proposal.validate()
+            ok, _err = proposal.validate()
             if not ok:
-                # If a strategy violates frozen contract, treat as a bug: do not trade it.
-                # You should log this upstream.
+                # Strategy produced invalid frozen contract proposal → skip (bug upstream)
                 continue
 
-            # Router-level basket3 soft block:
-            # If strategy returned Basket_3 AND config says soft-block, we can skip it and try next strategy.
-            # (This does NOT change the strategy logic; it just declines to execute that proposal.)
+            # Safety: enforce module-based constraints too (not only strategy name)
+            if (proposal.module == Module.LIQUIDITY_RAID) and (regime in self.config.disable_liquidity_raid_in):
+                continue
+
+            # Basket 3 soft block: keep as fallback, keep scanning for better
             if self.config.basket3_soft_block and proposal.basket == Basket.BASKET_3:
-                # Allow Basket3 only if no other strategy yields a valid trade
-                # We'll save it and return only if nothing else works.
-                basket3_candidate = proposal
-                # continue scanning others
-                # But we need to keep scanning; therefore hold candidate.
-                # We'll implement by setting aside and continue.
-                # (Simple approach: keep last seen candidate.)
-                ctx["_basket3_candidate"] = basket3_candidate
+                basket3_fallback = proposal
                 continue
 
             return proposal
 
-        # Fallback: return basket3 candidate if it exists
-        if self.config.basket3_soft_block and "_basket3_candidate" in ctx:
-            cand = ctx["_basket3_candidate"]
-            if isinstance(cand, ExecutionProposal):
-                return cand
-
-        return None
+        return basket3_fallback
