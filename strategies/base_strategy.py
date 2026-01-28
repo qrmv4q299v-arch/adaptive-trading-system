@@ -1,12 +1,19 @@
-class BaseStrategy:
-    def generate_signal(self, market_data):
-        raise NotImplementedError
+# strategies/base_strategy.py
+from __future__ import annotations
 
-    def build_proposal(self, signal):
-        return {
-            "symbol": signal["symbol"],
-            "direction": signal["direction"],
-            "size": signal["size"],
-            "strategy_name": self.__class__.__name__,
-            "timestamp": signal["timestamp"],
-        }
+from typing import Dict, Any, Optional
+
+from core.contracts import ExecutionProposal, HTFRegime
+
+
+class BaseStrategy:
+    name: str = "base"
+
+    def propose(
+        self,
+        symbol: str,
+        snapshot: Dict[str, Any],
+        regime: HTFRegime,
+        context: Dict[str, Any],
+    ) -> Optional[ExecutionProposal]:
+        raise NotImplementedError
