@@ -11,7 +11,6 @@ class RiskBrain:
         self.kill_switch = VolatilityKillSwitch()
         self.correlation_model = CorrelationModel()
         self.liquidity_model = LiquidityModel()
-
         self.cpm_active = False
 
     def update_market_state(self, market_data):
@@ -38,14 +37,9 @@ class RiskBrain:
         corr_exposure = self.correlation_model.correlated_exposure(
             symbol, self.portfolio.open_positions()
         )
+        corr_mult = 0.5 if corr_exposure > self.correlation_model.max_cluster_exposure else 1.0
 
-        corr_mult = 1.0
-        if corr_exposure > self.correlation_model.max_cluster_exposure:
-            corr_mult = 0.5
-
-        liquidity_mult = self.liquidity_model.liquidity_multiplier(
-            symbol, base_size, market_price
-        )
+        liquidity_mult = self.liquidity_model.liquidity_multiplier(symbol, base_size, market_price)
 
         combined_mult = dd_mult * vol_mult * cpm_mult * regime_mult * corr_mult * liquidity_mult
         size = base_size * combined_mult
@@ -55,20 +49,11 @@ class RiskBrain:
         regime = self.regime_model.get_regime()
         mode = "CPM" if self.cpm_active else "NORMAL"
 
-        reason = (
-            f"{mode} | Regime={regime} | CorrExp={corr_exposure:.2f} "
-            f"| LiqMult={liquidity_mult:.2f} | Size x{combined_mult:.2f}"
-        )
-
+        reason = f"{mode} | Regime={regime} | Size x{combined_mult:.2f}"
         return True, size, sl, tp, reason
 
-    def drawdown_multiplier(self):
-        return 1.0
-
-    def cpm_multiplier(self):
-        return 1.0
+    def drawdown_multiplier(self): return 1.0
+    def cpm_multiplier(self): return 1.0
 
     def compute_stops(self, direction, price):
-        if direction == "LONG":
-            return price * 0.98, price * 1.03
-        return price * 1.02, price * 0.97
+        return (price * 0.98, price * 1.03) if direction == "LONG" else (price * 1.02, price * 0.97)
