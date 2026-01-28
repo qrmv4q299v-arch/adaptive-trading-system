@@ -42,19 +42,24 @@ def main():
 
         strategy_name = "trend_following"
 
-        proposal = {
-            "symbol": symbol,
-            "direction": "LONG",
-            "size": 1.5,
-            "strategy": strategy_name
-        }
-
         if not router.is_strategy_allowed(strategy_name, regime):
             time.sleep(RECONCILE_INTERVAL)
             continue
 
-        adjusted_size, score = allocator.adjust_size(strategy_name, proposal["size"])
-        proposal["size"] = adjusted_size
+        base_size = 1.5
+        adjusted_size, score, health = allocator.adjust_size(strategy_name, base_size)
+
+        if adjusted_size == 0:
+            print(f"🛑 Strategy {strategy_name} DISABLED")
+            time.sleep(RECONCILE_INTERVAL)
+            continue
+
+        proposal = {
+            "symbol": symbol,
+            "direction": "LONG",
+            "size": adjusted_size,
+            "strategy": strategy_name
+        }
 
         approved, adj_size, sl, tp, reason = risk.evaluate_trade(proposal, market_price)
 
@@ -63,7 +68,7 @@ def main():
             proposal["stop_loss"] = sl
             proposal["take_profit"] = tp
             engine.execute(proposal, market_state)
-            print(f"✅ Score {score:.2f} | {reason}")
+            print(f"✅ {strategy_name} | Health={health} | Score={score:.2f}")
 
         portfolio.print_summary()
         time.sleep(RECONCILE_INTERVAL)
