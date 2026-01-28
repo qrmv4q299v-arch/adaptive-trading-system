@@ -28,10 +28,6 @@ class HTFRegime(Enum):
 
 @dataclass(frozen=True)
 class AuctionContext:
-    """
-    Frozen contract tag object.
-    Immutable microstructure tags used for attribution/audit trail.
-    """
     entry_at_val: bool = False
     entry_at_vah: bool = False
     entry_at_value_mid: bool = False
@@ -58,13 +54,6 @@ class AuctionContext:
 
 @dataclass(frozen=True)
 class ExecutionProposal:
-    """
-    The canonical immutable "proposal" object.
-    Strategies create it. Router selects it. Risk sizes/blocks it. Execution executes it.
-
-    IMPORTANT:
-    - No module should redefine this class. Import it from core.contracts everywhere.
-    """
     proposal_id: str
     symbol: str
     direction: str  # "LONG" | "SHORT"
@@ -73,7 +62,6 @@ class ExecutionProposal:
     stop_loss: float
     take_profit: float
 
-    # Frozen tags (mandatory)
     basket: Basket
     module: Module
     htf_regime: HTFRegime
