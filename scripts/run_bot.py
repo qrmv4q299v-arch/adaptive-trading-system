@@ -20,8 +20,16 @@ def main():
 
     while True:
         market_price = 50000
+
         risk.update_market_state({"price": market_price})
         regime = risk.regime_model.get_regime()
+
+        # --- VOL KILL SWITCH CHECK ---
+        if risk.kill_switch.is_active():
+            print("🚨 VOLATILITY KILL SWITCH TRIGGERED")
+            engine.position_manager.emergency_close_all()
+            time.sleep(RECONCILE_INTERVAL)
+            continue
 
         engine.position_manager.update_market_price("BTC-PERP", market_price, regime)
 
@@ -33,7 +41,6 @@ def main():
         }
 
         if not router.is_strategy_allowed(proposal["strategy"], regime):
-            print(f"⛔ Strategy disabled in {regime}")
             time.sleep(RECONCILE_INTERVAL)
             continue
 
@@ -44,10 +51,6 @@ def main():
             proposal["stop_loss"] = sl
             proposal["take_profit"] = tp
             engine.execute(proposal)
-
-            print(f"✅ Trade opened | SL {sl:.2f} | TP {tp:.2f}")
-        else:
-            print(f"⛔ Blocked: {reason}")
 
         portfolio.print_summary()
         time.sleep(RECONCILE_INTERVAL)
