@@ -5,6 +5,7 @@ from portfolio.portfolio_state import PortfolioState
 from risk.risk_brain import RiskBrain
 from risk.volatility_model import VolatilityModel
 from strategy.strategy_router import StrategyRouter
+from strategy.adaptive_allocator import AdaptiveAllocator
 
 RECONCILE_INTERVAL = 5
 
@@ -15,6 +16,7 @@ def main():
     vol_model = VolatilityModel()
     risk = RiskBrain(portfolio, vol_model)
     router = StrategyRouter()
+    allocator = AdaptiveAllocator()
 
     print("🚀 Bot started...")
 
@@ -38,16 +40,21 @@ def main():
 
         engine.position_manager.update_market_price(symbol, market_price, regime)
 
+        strategy_name = "trend_following"
+
         proposal = {
             "symbol": symbol,
             "direction": "LONG",
             "size": 1.5,
-            "strategy": "trend_following"
+            "strategy": strategy_name
         }
 
-        if not router.is_strategy_allowed(proposal["strategy"], regime):
+        if not router.is_strategy_allowed(strategy_name, regime):
             time.sleep(RECONCILE_INTERVAL)
             continue
+
+        adjusted_size, score = allocator.adjust_size(strategy_name, proposal["size"])
+        proposal["size"] = adjusted_size
 
         approved, adj_size, sl, tp, reason = risk.evaluate_trade(proposal, market_price)
 
@@ -56,7 +63,7 @@ def main():
             proposal["stop_loss"] = sl
             proposal["take_profit"] = tp
             engine.execute(proposal, market_state)
-            print(f"✅ {reason}")
+            print(f"✅ Score {score:.2f} | {reason}")
 
         portfolio.print_summary()
         time.sleep(RECONCILE_INTERVAL)
