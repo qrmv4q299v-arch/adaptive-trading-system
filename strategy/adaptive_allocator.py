@@ -1,26 +1,21 @@
-from typing import Tuple
-from analytics.performance_tracker import PerformanceTracker
+# strategy/adaptive_allocator.py
+from __future__ import annotations
+
+from dataclasses import dataclass
+
+
+@dataclass
+class AllocationDecision:
+    allocation_multiplier: float
+    reason: str
 
 
 class AdaptiveAllocator:
-    def __init__(self, tracker: PerformanceTracker):
-        self.tracker = tracker
+    """
+    Lightweight sizing helper (NOT risk brain).
+    RiskBrain still has final authority.
+    """
 
-    def adjust_size(self, strategy_name: str, base_size: float) -> Tuple[float, float, str]:
-        """
-        Returns: (adjusted_size, score, health)
-        """
-        health = self.tracker.get_health(strategy_name)
-        if health == "DISABLED":
-            return 0.0, 0.0, health
-
-        score = self.tracker.get_score(strategy_name)
-
-        if health == "WEAK":
-            score *= 0.5
-
-        adjusted = base_size * score
-        return adjusted, score, health
-
-    def record_result(self, strategy_name: str, pnl: float) -> None:
-        self.tracker.record_trade(strategy_name, pnl)
+    def decide(self, base_size: float, multiplier: float) -> AllocationDecision:
+        m = max(0.0, min(1.0, float(multiplier)))
+        return AllocationDecision(allocation_multiplier=m, reason=f"Allocator multiplier={m}")
