@@ -22,6 +22,12 @@ def main():
         symbol = "BTC-PERP"
         market_price = 50000
 
+        market_state = {
+            "spread": 0.0004,
+            "volatility": vol_model.current_volatility(),
+            "urgency": "normal"
+        }
+
         risk.update_market_state({"symbol": symbol, "price": market_price})
         regime = risk.regime_model.get_regime()
 
@@ -49,7 +55,7 @@ def main():
             proposal["size"] = adj_size
             proposal["stop_loss"] = sl
             proposal["take_profit"] = tp
-            engine.execute(proposal)
+            engine.execute(proposal, market_state)
             print(f"✅ {reason}")
 
         portfolio.print_summary()
