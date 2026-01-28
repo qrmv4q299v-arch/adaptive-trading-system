@@ -1,66 +1,26 @@
 # portfolio/portfolio_state.py
 from __future__ import annotations
 
-import logging
 from dataclasses import dataclass, field
-from typing import Dict, Any, Optional
-
-logger = logging.getLogger(__name__)
-
-
-@dataclass
-class Position:
-    symbol: str
-    size: float
-    direction: str  # LONG/SHORT
-    entry_price: float
+from time import time
+from typing import Dict, Any
 
 
 @dataclass
 class PortfolioState:
-    """
-    v1: minimal, but real.
-    - updated from exchange account snapshots (truth)
-    - can be used by risk brain / router (read-only)
-    """
-    positions: Dict[str, Position] = field(default_factory=dict)
-    last_account_snapshot: Dict[str, Any] = field(default_factory=dict)
-    last_pnl_snapshot: Dict[str, Any] = field(default_factory=dict)
+    timestamp: float = field(default_factory=lambda: float(time()))
+    positions: Dict[str, Any] = field(default_factory=dict)
+    balances: Dict[str, Any] = field(default_factory=dict)
+    pnl: Dict[str, float] = field(default_factory=lambda: {"realized": 0.0, "unrealized": 0.0})
+    exposure_usd: float = 0.0
+    api_failure_streak: int = 0
 
-    def update_from_account_snapshot(self, snapshot: Dict[str, Any]) -> None:
-        self.last_account_snapshot = snapshot or {}
-
-        # Best-effort extraction: positions could be under different keys per SDK
-        raw_positions = (
-            snapshot.get("positions")
-            or snapshot.get("open_positions")
-            or snapshot.get("account_positions")
-            or snapshot.get("raw", {}).get("positions")
-            or []
-        )
-
-        new_positions: Dict[str, Position] = {}
-        if isinstance(raw_positions, list):
-            for p in raw_positions:
-                if not isinstance(p, dict):
-                    continue
-                symbol = str(p.get("symbol") or p.get("ticker") or "")
-                if not symbol:
-                    continue
-                size = float(p.get("size") or p.get("position_size") or 0.0)
-                if size == 0:
-                    continue
-                entry = float(p.get("entry_price") or p.get("avg_entry_price") or 0.0)
-                direction = "LONG" if size > 0 else "SHORT"
-                new_positions[symbol] = Position(symbol=symbol, size=abs(size), direction=direction, entry_price=entry)
-
-        self.positions = new_positions
-
-    def update_from_pnl_snapshot(self, snapshot: Dict[str, Any]) -> None:
-        self.last_pnl_snapshot = snapshot or {}
-
-    def open_positions(self) -> Dict[str, Dict[str, Any]]:
+    def to_dict(self) -> Dict[str, Any]:
         return {
-            s: {"symbol": p.symbol, "size": p.size, "direction": p.direction, "entry_price": p.entry_price}
-            for s, p in self.positions.items()
+            "timestamp": self.timestamp,
+            "positions": self.positions,
+            "balances": self.balances,
+            "pnl": self.pnl,
+            "exposure_usd": self.exposure_usd,
+            "api_failure_streak": self.api_failure_streak,
         }
