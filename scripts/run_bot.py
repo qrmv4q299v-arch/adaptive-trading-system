@@ -19,14 +19,11 @@ def main():
     print("🚀 Bot started...")
 
     while True:
-        fills = engine.reconciler.reconcile()
-        for fill in fills:
-            portfolio.process_fill(fill)
-
-        portfolio.mark_to_market({})
-
         market_price = 50000
         risk.update_market_state({"price": market_price})
+        regime = risk.regime_model.get_regime()
+
+        engine.position_manager.update_market_price("BTC-PERP", market_price, regime)
 
         proposal = {
             "symbol": "BTC-PERP",
@@ -35,26 +32,22 @@ def main():
             "strategy": "trend_following"
         }
 
-        regime = risk.regime_model.get_regime()
-
         if not router.is_strategy_allowed(proposal["strategy"], regime):
-            print(f"⛔ Strategy {proposal['strategy']} disabled in {regime} regime")
+            print(f"⛔ Strategy disabled in {regime}")
             time.sleep(RECONCILE_INTERVAL)
             continue
 
-        approved, adj_size, stop_loss, take_profit, reason = risk.evaluate_trade(proposal, market_price)
+        approved, adj_size, sl, tp, reason = risk.evaluate_trade(proposal, market_price)
 
         if approved and adj_size > 0:
             proposal["size"] = adj_size
-            proposal["stop_loss"] = stop_loss
-            proposal["take_profit"] = take_profit
-
+            proposal["stop_loss"] = sl
+            proposal["take_profit"] = tp
             engine.execute(proposal)
 
-            print(f"✅ Trade approved: {proposal}")
-            print(f"🛑 SL: {stop_loss:.2f} | 🎯 TP: {take_profit:.2f} | {reason}")
+            print(f"✅ Trade opened | SL {sl:.2f} | TP {tp:.2f}")
         else:
-            print(f"⛔ Trade blocked: {reason}")
+            print(f"⛔ Blocked: {reason}")
 
         portfolio.print_summary()
         time.sleep(RECONCILE_INTERVAL)
