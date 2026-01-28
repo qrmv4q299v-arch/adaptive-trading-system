@@ -7,4 +7,4 @@ class APIClient:
         print(f"🔄 Updating stop for {symbol} → {new_stop:.2f}")
 
     def close_partial(self, symbol, size):
-        print(f"📉 Closing partial {size} on {symbol}")
+        print(f"📉 Closing {size} on {symbol}")
