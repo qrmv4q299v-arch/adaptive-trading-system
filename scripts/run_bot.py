@@ -19,22 +19,21 @@ def main():
     print("🚀 Bot started...")
 
     while True:
+        symbol = "BTC-PERP"
         market_price = 50000
 
-        risk.update_market_state({"price": market_price})
+        risk.update_market_state({"symbol": symbol, "price": market_price})
         regime = risk.regime_model.get_regime()
 
-        # --- VOL KILL SWITCH CHECK ---
         if risk.kill_switch.is_active():
-            print("🚨 VOLATILITY KILL SWITCH TRIGGERED")
             engine.position_manager.emergency_close_all()
             time.sleep(RECONCILE_INTERVAL)
             continue
 
-        engine.position_manager.update_market_price("BTC-PERP", market_price, regime)
+        engine.position_manager.update_market_price(symbol, market_price, regime)
 
         proposal = {
-            "symbol": "BTC-PERP",
+            "symbol": symbol,
             "direction": "LONG",
             "size": 1.5,
             "strategy": "trend_following"
@@ -51,6 +50,7 @@ def main():
             proposal["stop_loss"] = sl
             proposal["take_profit"] = tp
             engine.execute(proposal)
+            print(f"✅ {reason}")
 
         portfolio.print_summary()
         time.sleep(RECONCILE_INTERVAL)
