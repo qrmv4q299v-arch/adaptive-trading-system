@@ -2,273 +2,95 @@
 from __future__ import annotations
 
 import asyncio
-import logging
 from dataclasses import dataclass
-from typing import Any, Dict, Optional, List
-
-logger = logging.getLogger(__name__)
+from typing import Any, Dict, Optional
 
 
 class APIError(Exception):
     pass
 
 
-@dataclass(frozen=True)
-class LighterConfig:
-    key: str
-    secret: str
-    account_index: int
-    api_key_index: int
-    base_url: str
+@dataclass
+class OrderResult:
+    order_id: str
+    status: str
+    filled_size: float
+    avg_price: float
+    raw: Dict[str, Any]
 
 
 class LighterApiClient:
     """
-    Async-safe wrapper over Lighter SDK.
-
-    Goals:
-    - Serialized init (no races)
-    - Defensive API calls (schema checks)
-    - Provide minimal primitives needed by execution/reconciliation:
-        - market_order()
-        - cancel_order()
-        - get_order_by_client_id()
-        - get_open_orders()
-        - get_inactive_orders()
-        - get_account_state()
-        - get_pnl()
+    Safe wrapper skeleton.
+    For now: supports DRY_RUN mode.
+    Later: replace internals with real Lighter SDK calls.
     """
 
-    def __init__(self, cfg: LighterConfig):
-        self.cfg = cfg
-        self._client = None
-        self._initialized = False
+    def __init__(
+        self,
+        key: str = "",
+        secret: str = "",
+        account_index: int = 0,
+        api_key_index: int = 0,
+        base_url: str = "",
+        dry_run: bool = True,
+    ) -> None:
+        self.key = key
+        self.secret = secret
+        self.account_index = account_index
+        self.api_key_index = api_key_index
+        self.base_url = base_url
+        self.dry_run = dry_run
+
         self._init_lock = asyncio.Lock()
+        self._initialized = False
+
+        self._sdk = None  # real SDK later
 
     async def init(self) -> None:
         async with self._init_lock:
             if self._initialized:
                 return
 
-            # Try common SDK entrypoints. You may need to adjust imports to match your installed package.
-            try:
-                from lighter_sdk.lighter import Lighter  # type: ignore
-            except Exception:
-                try:
-                    from lighter.lighter import Lighter  # type: ignore
-                except Exception as e:
-                    raise APIError(
-                        "Cannot import Lighter SDK. Install/verify package name (lighter-sdk / lighter-python)."
-                    ) from e
-
-            try:
-                self._client = Lighter(
-                    key=self.cfg.key,
-                    secret=self.cfg.secret,
-                    account_index=self.cfg.account_index,
-                    api_key_index=self.cfg.api_key_index,
-                    url=self.cfg.base_url,
-                )
-                # Some SDKs require async init_client()
-                init_fn = getattr(self._client, "init_client", None)
-                if callable(init_fn):
-                    maybe = init_fn()
-                    if asyncio.iscoroutine(maybe):
-                        await maybe
-
+            if self.dry_run:
                 self._initialized = True
-                logger.info("Lighter API client initialized")
-            except Exception as e:
-                logger.exception("Failed to initialize Lighter client")
-                raise APIError(f"Client initialization failed: {e}") from e
+                return
 
-    def _require(self) -> Any:
-        if not self._initialized or self._client is None:
-            raise APIError("Client not initialized. Call await client.init() first.")
-        return self._client
+            # TODO: real init with Lighter SDK
+            # from lighter_sdk.lighter import Lighter
+            # self._sdk = Lighter(...)
+            # await self._sdk.init_client()
+            raise APIError("Live init not implemented yet. Set DRY_RUN=1 for now.")
 
-    # -----------------------------
-    # Orders
-    # -----------------------------
-
-    async def market_order(self, symbol: str, amount: float, client_order_id: str) -> Dict[str, Any]:
-        """
-        amount: + for LONG, - for SHORT
-        """
+    async def create_market_order(self, symbol: str, amount: float, client_order_id: str) -> OrderResult:
         await self.init()
-        c = self._require()
-        try:
-            fn = getattr(c, "market_order", None)
-            if not callable(fn):
-                # fallback: some SDKs use OrderApi
-                order_api = getattr(c, "order_api", None) or getattr(c, "OrderApi", None)
-                if order_api and hasattr(order_api, "market_order"):
-                    fn = order_api.market_order
-                else:
-                    raise APIError("SDK missing market_order(). Map this method to your SDK.")
 
-            resp = fn(ticker=symbol, amount=amount, client_order_id=client_order_id)
-            if asyncio.iscoroutine(resp):
-                resp = await resp
+        if self.dry_run:
+            # simulate immediate fill
+            raw = {
+                "order_id": f"DRY_{client_order_id}",
+                "status": "FILLED",
+                "filled_size": abs(float(amount)),
+                "avg_price": 100.0,
+            }
+            return OrderResult(
+                order_id=raw["order_id"],
+                status=raw["status"],
+                filled_size=float(raw["filled_size"]),
+                avg_price=float(raw["avg_price"]),
+                raw=raw,
+            )
 
-            order = self._extract_first_order(resp)
-            self._validate_order_fields(order, required=("order_id", "status", "filled_size", "avg_price"))
-            return order
-        except Exception as e:
-            logger.exception("market_order failed")
-            raise APIError(f"market_order failed: {e}") from e
+        raise APIError("Live market order not implemented yet.")
+
+    async def get_order_status(self, symbol: str, order_id: str) -> Dict[str, Any]:
+        await self.init()
+        if self.dry_run:
+            return {"order_id": order_id, "status": "FILLED"}
+        raise APIError("Live get_order_status not implemented yet.")
 
     async def cancel_order(self, symbol: str, order_id: str) -> Dict[str, Any]:
         await self.init()
-        c = self._require()
-        try:
-            fn = getattr(c, "cancel_order", None)
-            if not callable(fn):
-                order_api = getattr(c, "order_api", None) or getattr(c, "OrderApi", None)
-                if order_api and hasattr(order_api, "cancel_order"):
-                    fn = order_api.cancel_order
-                else:
-                    raise APIError("SDK missing cancel_order(). Map this method to your SDK.")
-
-            resp = fn(ticker=symbol, order_id=order_id)
-            if asyncio.iscoroutine(resp):
-                resp = await resp
-            return resp if isinstance(resp, dict) else {"raw": resp}
-        except Exception as e:
-            logger.exception("cancel_order failed")
-            raise APIError(f"cancel_order failed: {e}") from e
-
-    async def get_open_orders(self) -> List[Dict[str, Any]]:
-        """
-        Best-effort: returns list of open orders.
-        """
-        await self.init()
-        c = self._require()
-        try:
-            # Common names in SDKs
-            fn = getattr(c, "order_book_orders", None)
-            if not callable(fn):
-                order_api = getattr(c, "order_api", None) or getattr(c, "OrderApi", None)
-                if order_api and hasattr(order_api, "order_book_orders"):
-                    fn = order_api.order_book_orders
-                else:
-                    return []
-
-            resp = fn(account_index=self.cfg.account_index)
-            if asyncio.iscoroutine(resp):
-                resp = await resp
-            if isinstance(resp, dict) and "orders" in resp and isinstance(resp["orders"], list):
-                return resp["orders"]
-            if isinstance(resp, list):
-                return resp
-            return []
-        except Exception:
-            logger.exception("get_open_orders failed (returning empty)")
-            return []
-
-    async def get_inactive_orders(self) -> List[Dict[str, Any]]:
-        """
-        filled/cancelled history, best-effort.
-        """
-        await self.init()
-        c = self._require()
-        try:
-            fn = getattr(c, "account_inactive_orders", None)
-            if not callable(fn):
-                order_api = getattr(c, "order_api", None) or getattr(c, "OrderApi", None)
-                if order_api and hasattr(order_api, "account_inactive_orders"):
-                    fn = order_api.account_inactive_orders
-                else:
-                    return []
-
-            resp = fn(account_index=self.cfg.account_index)
-            if asyncio.iscoroutine(resp):
-                resp = await resp
-            if isinstance(resp, dict) and "orders" in resp and isinstance(resp["orders"], list):
-                return resp["orders"]
-            if isinstance(resp, list):
-                return resp
-            return []
-        except Exception:
-            logger.exception("get_inactive_orders failed (returning empty)")
-            return []
-
-    async def get_order_by_client_id(self, client_order_id: str) -> Optional[Dict[str, Any]]:
-        """
-        Best-effort:
-        - search open orders first
-        - then inactive orders
-        """
-        open_orders = await self.get_open_orders()
-        for o in open_orders:
-            if str(o.get("client_order_id")) == str(client_order_id):
-                return o
-        inactive = await self.get_inactive_orders()
-        for o in inactive:
-            if str(o.get("client_order_id")) == str(client_order_id):
-                return o
-        return None
-
-    # -----------------------------
-    # Account / PnL
-    # -----------------------------
-
-    async def get_account_state(self) -> Dict[str, Any]:
-        await self.init()
-        c = self._require()
-        try:
-            fn = getattr(c, "account", None)
-            if not callable(fn):
-                account_api = getattr(c, "account_api", None) or getattr(c, "AccountApi", None)
-                if account_api and hasattr(account_api, "account"):
-                    fn = account_api.account
-                else:
-                    raise APIError("SDK missing account() / AccountApi.account(). Map this method to your SDK.")
-
-            resp = fn(account_index=self.cfg.account_index)
-            if asyncio.iscoroutine(resp):
-                resp = await resp
-            return resp if isinstance(resp, dict) else {"raw": resp}
-        except Exception as e:
-            logger.exception("get_account_state failed")
-            raise APIError(f"get_account_state failed: {e}") from e
-
-    async def get_pnl(self) -> Dict[str, Any]:
-        await self.init()
-        c = self._require()
-        try:
-            fn = getattr(c, "pnl", None)
-            if not callable(fn):
-                account_api = getattr(c, "account_api", None) or getattr(c, "AccountApi", None)
-                if account_api and hasattr(account_api, "pnl"):
-                    fn = account_api.pnl
-                else:
-                    return {}
-
-            resp = fn(account_index=self.cfg.account_index)
-            if asyncio.iscoroutine(resp):
-                resp = await resp
-            return resp if isinstance(resp, dict) else {"raw": resp}
-        except Exception:
-            logger.exception("get_pnl failed (returning empty)")
-            return {}
-
-    # -----------------------------
-    # Helpers
-    # -----------------------------
-
-    @staticmethod
-    def _extract_first_order(resp: Any) -> Dict[str, Any]:
-        if isinstance(resp, dict) and "orders" in resp and isinstance(resp["orders"], list) and resp["orders"]:
-            o = resp["orders"][0]
-            return o if isinstance(o, dict) else {"raw": o}
-        if isinstance(resp, dict):
-            # some SDKs return a single order dict
-            return resp
-        raise APIError(f"Invalid order response: {resp}")
-
-    @staticmethod
-    def _validate_order_fields(order: Dict[str, Any], required: tuple[str, ...]) -> None:
-        for f in required:
-            if f not in order:
-                raise APIError(f"Order missing required field '{f}': {order}")
+        if self.dry_run:
+            return {"order_id": order_id, "status": "CANCELLED"}
+        raise APIError("Live cancel_order not implemented yet.")
