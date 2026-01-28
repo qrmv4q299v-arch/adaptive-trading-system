@@ -1,11 +1,14 @@
+import time
 from risk.trailing_stop_model import TrailingStopModel
 from risk.position_exit_model import PositionExitModel
+from risk.time_stop_model import TimeStopModel
 
 class PositionManager:
     def __init__(self, api_client):
         self.api = api_client
         self.trailing_model = TrailingStopModel()
         self.exit_model = PositionExitModel()
+        self.time_model = TimeStopModel()
         self.positions = {}
 
     def on_fill(self, fill):
@@ -18,7 +21,8 @@ class PositionManager:
             "take_profit": fill.get("take_profit"),
             "break_even_set": False,
             "trailing_active": False,
-            "tp1_hit": False
+            "tp1_hit": False,
+            "entry_time": time.time()
         }
 
     def update_market_price(self, symbol, price, regime):
@@ -29,6 +33,13 @@ class PositionManager:
         entry = pos["entry_price"]
         direction = pos["direction"]
 
+        # ---- TIME STOP ----
+        if self.time_model.should_time_exit(entry, price, pos["entry_time"], regime):
+            print(f"⏳ Time stop exit on {symbol}")
+            self.api.close_partial(symbol, pos["size"])
+            del self.positions[symbol]
+            return
+
         # ---- PARTIAL TAKE PROFIT ----
         if not pos["tp1_hit"]:
             tp1 = self.exit_model.tp1_price(entry, direction, regime)
@@ -38,7 +49,6 @@ class PositionManager:
 
                 close_size = pos["size"] * self.exit_model.partial_close_fraction
                 self.api.close_partial(symbol, close_size)
-
                 pos["size"] -= close_size
                 pos["tp1_hit"] = True
 
