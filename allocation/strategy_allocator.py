@@ -1,8 +1,8 @@
-# allocation/strategy_allocator.py
+# analytics/performance_tracker.py
 from __future__ import annotations
 
-class StrategyAllocator:
+class PerformanceTracker:
     """
-    Placeholder: allocates capital across strategies/baskets.
+    Placeholder: store performance and feedback for learning system.
     """
     pass
