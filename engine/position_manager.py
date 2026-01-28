@@ -1,9 +1,11 @@
 from risk.trailing_stop_model import TrailingStopModel
+from risk.position_exit_model import PositionExitModel
 
 class PositionManager:
     def __init__(self, api_client):
         self.api = api_client
         self.trailing_model = TrailingStopModel()
+        self.exit_model = PositionExitModel()
         self.positions = {}
 
     def on_fill(self, fill):
@@ -15,7 +17,8 @@ class PositionManager:
             "stop_loss": fill.get("stop_loss"),
             "take_profit": fill.get("take_profit"),
             "break_even_set": False,
-            "trailing_active": False
+            "trailing_active": False,
+            "tp1_hit": False
         }
 
     def update_market_price(self, symbol, price, regime):
@@ -25,6 +28,21 @@ class PositionManager:
         pos = self.positions[symbol]
         entry = pos["entry_price"]
         direction = pos["direction"]
+
+        # ---- PARTIAL TAKE PROFIT ----
+        if not pos["tp1_hit"]:
+            tp1 = self.exit_model.tp1_price(entry, direction, regime)
+
+            if (direction == "LONG" and price >= tp1) or \
+               (direction == "SHORT" and price <= tp1):
+
+                close_size = pos["size"] * self.exit_model.partial_close_fraction
+                self.api.close_partial(symbol, close_size)
+
+                pos["size"] -= close_size
+                pos["tp1_hit"] = True
+
+                print(f"💰 TP1 hit on {symbol}, closed {close_size}")
 
         # ---- BREAK EVEN JUMP ----
         if not pos["break_even_set"]:
@@ -46,7 +64,7 @@ class PositionManager:
             if self.trailing_model.should_activate_trailing(entry, price, direction, regime):
                 pos["trailing_active"] = True
 
-        # ---- TRAILING STOP UPDATES ----
+        # ---- TRAILING STOP ----
         if pos["trailing_active"]:
             new_sl = self.trailing_model.new_trailing_stop(price, direction, regime)
 
