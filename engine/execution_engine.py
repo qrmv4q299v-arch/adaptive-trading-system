@@ -4,7 +4,7 @@ class ExecutionEngine:
     def __init__(self, api_client):
         self.api = api_client
         self.position_manager = PositionManager(api_client)
-        self.reconciler = None  # assuming already implemented
+        self.reconciler = None
 
     def execute(self, proposal):
         order = {
