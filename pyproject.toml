@@ -1,0 +1,10 @@
+[project]
+name = "adaptive-trading-system"
+version = "0.1.0"
+description = "Adaptive trading system scaffold (dry-run + modular architecture)."
+requires-python = ">=3.10"
+
+dependencies = []
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
