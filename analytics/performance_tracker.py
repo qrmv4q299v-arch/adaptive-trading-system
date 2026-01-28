@@ -1,15 +1,21 @@
-class PerformanceTracker:
-    def __init__(self):
-        self.stats = {}
+from collections import deque
+from typing import Dict
 
-    def record_trade(self, strategy, pnl):
+
+class PerformanceTracker:
+    def __init__(self, recent_window: int = 30):
+        self.stats: Dict[str, dict] = {}
+        self.recent_window = recent_window
+
+    def record_trade(self, strategy: str, pnl: float):
         if strategy not in self.stats:
             self.stats[strategy] = {
                 "trades": 0,
                 "wins": 0,
                 "pnl": 0.0,
                 "peak_pnl": 0.0,
-                "drawdown": 0.0
+                "drawdown": 0.0,
+                "recent": deque(maxlen=self.recent_window),  # store last N pnls
             }
 
         s = self.stats[strategy]
@@ -21,17 +27,34 @@ class PerformanceTracker:
         if pnl > 0:
             s["wins"] += 1
 
-    def get_score(self, strategy):
+        s["recent"].append(pnl)
+
+    def get_score(self, strategy: str) -> float:
+        """
+        Score in [0.5..1.5] using:
+          - global win_rate
+          - recent average pnl
+        """
         s = self.stats.get(strategy)
         if not s or s["trades"] < 5:
             return 1.0
 
         win_rate = s["wins"] / s["trades"]
-        avg_pnl = s["pnl"] / s["trades"]
+        recent = list(s["recent"])
+        recent_avg = sum(recent) / len(recent) if recent else 0.0
 
-        return max(0.5, min(1.5, win_rate + avg_pnl))
+        # Basic blending: win_rate contributes most, recent_avg nudges it
+        # (Keep it conservative for now.)
+        raw = win_rate + (recent_avg * 0.05)  # scale down pnl effect
+        return max(0.5, min(1.5, raw))
 
-    def get_health(self, strategy):
+    def get_health(self, strategy: str) -> str:
+        """
+        HEALTHY / WEAK / DISABLED based on:
+          - drawdown
+          - win rate
+          - recent window collapse
+        """
         s = self.stats.get(strategy)
         if not s or s["trades"] < 10:
             return "HEALTHY"
@@ -39,8 +62,16 @@ class PerformanceTracker:
         win_rate = s["wins"] / s["trades"]
         dd = s["drawdown"]
 
-        if dd > 5 or win_rate < 0.35:
+        recent = list(s["recent"])
+        recent_wins = sum(1 for x in recent if x > 0)
+        recent_wr = (recent_wins / len(recent)) if recent else 1.0
+
+        # Hard disable conditions
+        if dd > 5 or win_rate < 0.35 or recent_wr < 0.30:
             return "DISABLED"
-        if win_rate < 0.45:
+
+        # Weak conditions
+        if win_rate < 0.45 or recent_wr < 0.40:
             return "WEAK"
+
         return "HEALTHY"
